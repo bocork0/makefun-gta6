@@ -115,4 +115,8 @@ bay city of Solmar Bay, doing three jobs for fixer **Lena Cross**.
 
 ## HEAD
 
-(HEAD SHA is recorded in the builder's final report; `git log -1` in the entry dir.)
+- `aa24d08` — "Add Solmar Bay — Make GTA 6 (gta6-01) entry" (all game files,
+  screenshots, LICENSE, README, main.ts, serve.ts, shots.json)
+- `9a18474` — this STATUS.md (full SHA:
+  9a184742413c398bc138e9bec8c90cf8edafed02)
+- Working tree clean at HEAD; no remote; nothing pushed.
