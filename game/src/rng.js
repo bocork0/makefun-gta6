@@ -1,19 +1,41 @@
-// Deterministic RNG (mulberry32) so a seed always builds the same city.
-export function mulberry32(seed) {
+// Solmar Bay — small seeded random generator.
+// The city, traffic and pedestrians are laid out from one seed so a
+// screenshot run (?seed=N) rebuilds the exact same streets.
+
+export function makeRng(seed) {
   let a = seed >>> 0;
+  if (a === 0) a = 0x9e3779b9;
   return function next() {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+export function range(rng, min, max) {
+  return min + rng() * (max - min);
+}
+
+export function intRange(rng, min, max) {
+  return Math.floor(range(rng, min, max + 1));
 }
 
 export function pick(rng, list) {
   return list[Math.floor(rng() * list.length)];
 }
 
-export function range(rng, min, max) {
-  return min + rng() * (max - min);
+export function chance(rng, p) {
+  return rng() < p;
+}
+
+// Deterministic hash of a string, for seeding from a name.
+export function hashSeed(text) {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
 }

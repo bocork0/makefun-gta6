@@ -1,126 +1,108 @@
-// Keyboard + mouse input. Drag to look (no pointer lock, so it works headless too);
-// arrow keys also rotate the camera. Actions are edge-triggered and consumed by takeActions().
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
-export const ACTION_ENTER_CAR = 4;
-export const ACTION_PUNCH = 8;
-export const ACTION_SHOOT = 16;
-export const ACTION_INTERACT = 32;
+// Solmar Bay — keyboard and mouse input.
+// Holds the live key set plus edge-triggered "just pressed" flags that the
+// game loop consumes once per frame, so a tap of E never fires twice.
 
-export function createInput(canvas) {
-  const keys = new Set();
-  let actions = 0;
-  let dragging = false;
-  let lastX = 0;
-  let lastY = 0;
-  let lookDX = 0;
-  let lookDY = 0;
-  let shootHeld = false;
-  let shootQueued = false;
-
-  function codeOf(e) {
-    return e.code || e.key;
+export class Input {
+  constructor(canvas) {
+    this.keys = new Set();
+    this.pressed = new Set();
+    this.mouseDown = false;
+    this.mouseClicked = false;
+    this.mouseX = 0;
+    this.mouseY = 0;
+    this.dragDX = 0;
+    this.dragDY = 0;
+    this.dragging = false;
+    this.lastX = 0;
+    this.lastY = 0;
+    this.canvas = canvas;
+    this.onFirstGesture = null;
+    this.gestureSeen = false;
+    this.attach(canvas);
   }
 
-  function onKeyDown(e) {
-    const code = codeOf(e);
-    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(code)) e.preventDefault();
-    if (e.repeat) return;
-    keys.add(code);
-    if (code === 'Space' || code === 'Enter') actions |= ACTION_CONFIRM;
-    if (code === 'KeyP' || code === 'Escape') actions |= ACTION_PAUSE;
-    if (code === 'KeyE') actions |= ACTION_ENTER_CAR;
-    if (code === 'KeyF') actions |= ACTION_PUNCH;
-    if (code === 'KeyQ') actions |= ACTION_INTERACT;
-  }
-
-  function onKeyUp(e) {
-    keys.delete(codeOf(e));
-  }
-
-  function onMouseDown(e) {
-    if (e.button === 0) {
-      dragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      shootHeld = true;
-      shootQueued = true;
+  noteGesture() {
+    if (!this.gestureSeen) {
+      this.gestureSeen = true;
+      if (this.onFirstGesture) this.onFirstGesture();
     }
   }
 
-  function onMouseMove(e) {
-    if (!dragging) return;
-    lookDX += e.clientX - lastX;
-    lookDY += e.clientY - lastY;
-    lastX = e.clientX;
-    lastY = e.clientY;
-  }
-
-  function onMouseUp(e) {
-    if (e.button === 0) {
-      dragging = false;
-      shootHeld = false;
-    }
-  }
-
-  window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
-  canvas.addEventListener('mousedown', onMouseDown);
-  window.addEventListener('mousemove', onMouseMove);
-  window.addEventListener('mouseup', onMouseUp);
-  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-
-  return {
-    // Forward/back/strafe in camera space, -1..1 each.
-    move() {
-      let f = 0;
-      let s = 0;
-      if (keys.has('KeyW') || keys.has('ArrowUp')) f += 1;
-      if (keys.has('KeyS') || keys.has('ArrowDown')) f -= 1;
-      if (keys.has('KeyA')) s -= 1;
-      if (keys.has('KeyD')) s += 1;
-      return { f, s };
-    },
-    running() {
-      return keys.has('ShiftLeft') || keys.has('ShiftRight');
-    },
-    cameraTurn() {
-      let turn = 0;
-      if (keys.has('ArrowLeft')) turn -= 1;
-      if (keys.has('ArrowRight')) turn += 1;
-      return turn;
-    },
-    takeLook() {
-      const dx = lookDX;
-      const dy = lookDY;
-      lookDX = 0;
-      lookDY = 0;
-      return { dx, dy };
-    },
-    takeActions() {
-      const a = actions;
-      actions = 0;
-      if (shootQueued) {
-        shootQueued = false;
-        return a | ACTION_SHOOT;
+  attach(canvas) {
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      this.keys.add(e.code);
+      this.pressed.add(e.code);
+      this.noteGesture();
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+        e.preventDefault();
       }
-      return a;
-    },
-    shooting() {
-      return shootHeld;
-    },
-    held(code) {
-      return keys.has(code);
-    },
-    // Test / automation hook: pretend keys are held.
-    press(code) {
-      keys.add(code);
-    },
-    release(code) {
-      keys.delete(code);
-    },
-    queueAction(action) {
-      actions |= action;
-    },
-  };
+    });
+    window.addEventListener('keyup', (e) => {
+      this.keys.delete(e.code);
+    });
+    window.addEventListener('blur', () => {
+      this.keys.clear();
+    });
+    canvas.addEventListener('mousedown', (e) => {
+      this.mouseDown = true;
+      this.mouseClicked = true;
+      this.dragging = true;
+      this.lastX = e.clientX;
+      this.lastY = e.clientY;
+      this.noteGesture();
+    });
+    window.addEventListener('mouseup', () => {
+      this.mouseDown = false;
+      this.dragging = false;
+    });
+    window.addEventListener('mousemove', (e) => {
+      this.mouseX = e.clientX;
+      this.mouseY = e.clientY;
+      if (this.dragging) {
+        this.dragDX += e.clientX - this.lastX;
+        this.dragDY += e.clientY - this.lastY;
+        this.lastX = e.clientX;
+        this.lastY = e.clientY;
+      }
+    });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+
+  down(...codes) {
+    return codes.some((c) => this.keys.has(c));
+  }
+
+  // True once, on the frame the key went down; consumed by endFrame().
+  wasPressed(...codes) {
+    return codes.some((c) => this.pressed.has(c));
+  }
+
+  takeDrag() {
+    const d = { dx: this.dragDX, dy: this.dragDY };
+    this.dragDX = 0;
+    this.dragDY = 0;
+    return d;
+  }
+
+  takeClick() {
+    const c = this.mouseClicked;
+    this.mouseClicked = false;
+    return c;
+  }
+
+  endFrame() {
+    this.pressed.clear();
+  }
+
+  // Movement axes, -1..1. Forward is W / ArrowUp, strafe is A/D on foot.
+  moveAxis() {
+    const f = (this.down('KeyW', 'ArrowUp') ? 1 : 0) - (this.down('KeyS', 'ArrowDown') ? 1 : 0);
+    const s = (this.down('KeyD', 'ArrowRight') ? 1 : 0) - (this.down('KeyA', 'ArrowLeft') ? 1 : 0);
+    return { forward: f, strafe: s };
+  }
+
+  get sprint() {
+    return this.down('ShiftLeft', 'ShiftRight');
+  }
 }

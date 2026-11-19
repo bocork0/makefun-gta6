@@ -1,88 +1,124 @@
-// Solmar Bay — configuration: city layout, tuning, missions, save key.
-// All names, places and people here are original inventions for this game.
-export const STEP = 1 / 60;
-export const SAVE_KEY = 'solmarbay-save-v1';
+// Solmar Bay — central tuning and world constants.
+// Every number the game balances on lives here so the rest of the code
+// reads like the design, not like magic numbers.
 
-// City grid: streets run at these coordinates (metres); blocks sit between them.
-export const STREETS = [-140, -100, -60, -20, 20, 60, 100, 140];
-export const CITY_HALF = 168; // drivable/pedestrian extent
-export const STREET_HALF = 6; // half-width of a street
-export const LANE = 3; // lane offset from a street centre line
+export const WORLD = {
+  blocks: 8, // city blocks per side
+  block: 44, // metres per block (building plot + road)
+  road: 14, // metres of road between blocks
+  coast: 60, // metres of beach + water south of the city
+  bound: 420, // playable half-extent; the city + beach fit inside
+};
+
+export const CITY = {
+  // Palette: sun-soaked coastal city — warm plaster, glass blue, terracotta.
+  buildingColors: [0xd9c9a8, 0xc9b18c, 0x9fb8c8, 0xe8dcc8, 0xb8a88f, 0x7fa3b8, 0xd8b48f, 0xa8c0b0],
+  roofColors: [0x8a7a5e, 0x6e7f80, 0x9c8a70, 0x5e6e7a],
+  roadColor: 0x3a3f46,
+  sidewalkColor: 0x9a938a,
+  sandColor: 0xe0c98f,
+  seaColor: 0x2e7f9e,
+  grassColor: 0x7fae6a,
+  skyColor: 0x9fd4e8,
+  fogColor: 0xa8cfe0,
+  sunColor: 0xfff2d8,
+};
 
 export const PLAYER = {
-  walkSpeed: 4.2,
-  runSpeed: 7.2,
-  radius: 0.55,
-  hp: 100,
-  punchDamage: 34,
-  punchRange: 2.4,
+  walkSpeed: 6,
+  sprintSpeed: 10,
+  radius: 0.7,
+  maxHealth: 100,
+  punchDamage: 12,
+  pistolDamage: 34,
+  pistolCooldown: 0.28,
   punchCooldown: 0.45,
-  shootCooldown: 0.28,
-  gunDamage: 25,
-  gunRange: 90,
+  punchRange: 2.2,
+  shootRange: 60,
 };
 
 export const CAR = {
-  accel: 13,
-  brake: 26,
-  maxSpeed: 30,
-  reverseMax: 9,
-  turnRate: 2.1,
-  trafficSpeed: 9,
-  policeSpeed: 33,
+  accel: 22,
+  brake: 34,
+  reverseAccel: 12,
+  maxSpeed: 34,
+  maxReverse: 9,
+  steerRate: 1.9,
+  grip: 6.5,
+  colors: [0xc23b2e, 0x2e6fc2, 0xe8c832, 0x3aa655, 0xe8e8e8, 0x222831, 0xd97b2e, 0x7a4fb5],
+};
+
+export const TRAFFIC = {
+  count: 14,
+  speed: 9,
+  despawnDistance: 260,
+  spawnDistance: 150,
+};
+
+export const PEDESTRIANS = {
+  count: 22,
+  walkSpeed: 1.6,
+  fleeSpeed: 4.5,
 };
 
 export const WANTED = {
-  max: 5,
-  decaySeconds: 25, // no crime for this long drops one star
-  copSpawnAt: 2, // on-foot cops appear from 2 stars
-  bustSeconds: 3, // a cop touching you on foot this long = busted
+  maxStars: 5,
+  decayQuietSeconds: 25, // no crime for this long, then stars start falling
+  decayStepSeconds: 5, // one star per this many quiet seconds after that
+  policePerStar: [0, 1, 2, 3, 4, 4],
+  policeSpeed: 26,
+  bustDistance: 4.5,
+  bustSeconds: 2.0,
+  bustFine: 200,
+  wastedFine: 100,
 };
 
-// Named places on the map (all at street intersections, so cars can reach them).
-export const PLACES = {
-  plaza: { x: 0, z: 0, name: 'Marina Plaza' },
-  garage: { x: -140, z: -100, name: "Venn's Garage" },
-  docks: { x: 140, z: 140, name: 'Solmar Docks' },
-  gull: { x: -100, z: 140, name: 'The Gull Bar' },
-  bank: { x: 100, z: -100, name: 'Solmar Bank' },
-  safehouse: { x: 140, z: 100, name: 'Safehouse' },
-  hospital: { x: 20, z: -20, name: 'Solmar General' },
-};
-
-// The three chained story missions. stages: 'go' (reach marker), 'grab' (hold E),
-// 'deliver' (reach marker in a car / on foot as noted).
 export const MISSIONS = [
   {
     id: 'hot-wheels',
-    title: 'Mission 1 — Hot Wheels',
-    story:
-      "Lena Cross needs wheels for a job tonight. Steal any car on the street and bring it to Venn's Garage.",
-    stages: [{ kind: 'deliverCar', place: 'garage', text: "Steal a car, then drive it to Venn's Garage" }],
-    reward: 500,
+    name: 'Hot Wheels',
+    payout: 500,
+    intro: 'Lena: "A cherry-red Veloce is parked by the marina. Bring it to my garage — no scratches, no cops."',
+    steps: [
+      { kind: 'goto', text: 'Steal the red Veloce at the marina', at: 'marina' },
+      { kind: 'deliver', text: 'Deliver the Veloce to Lena\u2019s garage', at: 'garage' },
+    ],
   },
   {
     id: 'the-package',
-    title: 'Mission 2 — The Package',
-    story:
-      'A crate landed at the Solmar Docks with no name on it. Lena wants it at The Gull Bar before sundown. It is hot — expect company.',
-    stages: [
-      { kind: 'go', place: 'docks', text: 'Get to the Solmar Docks' },
-      { kind: 'grab', place: 'docks', text: 'On foot: walk into the marker to pick up the package' },
-      { kind: 'deliver', place: 'gull', text: 'Deliver the package to The Gull Bar' },
+    name: 'The Package',
+    payout: 1200,
+    intro: 'Lena: "A package is waiting at the docks. Pick it up and run it north — do not open it."',
+    steps: [
+      { kind: 'goto', text: 'Pick up the package at the docks', at: 'docks' },
+      { kind: 'deliver', text: 'Deliver the package to the north drop', at: 'northDrop' },
     ],
-    reward: 1200,
   },
   {
-    id: 'the-vault-run',
-    title: 'Mission 3 — The Vault Run',
-    story:
-      'The big one. Solmar Bank keeps a cash cart by the vault door every morning. Grab it, and run — every cop in the bay will be on you.',
-    stages: [
-      { kind: 'go', place: 'bank', text: 'Get to Solmar Bank' },
-      { kind: 'grab', place: 'bank', text: 'On foot: hold E at the vault to grab the cash' },
-      { kind: 'deliver', place: 'safehouse', text: 'Escape to the Safehouse — lose the cops!' },
+    id: 'vault-run',
+    name: 'Vault Run',
+    payout: 5000,
+    intro: 'Lena: "One last job. Crack the vault at Solmar National, then lose the heat and get to the safehouse."',
+    steps: [
+      { kind: 'goto', text: 'Reach the Solmar National Bank', at: 'bank' },
+      { kind: 'hold', text: 'Crack the vault — stay inside the marker', at: 'bank', holdSeconds: 6 },
+      { kind: 'deliver', text: 'Escape to the safehouse', at: 'safehouse' },
     ],
-    reward: 5000,
   },
 ];
+
+// Named places on the map, in world metres (x east, z south; y is up).
+// The city grid is centred on (0,0); the beach and sea are to the south (+z).
+// Every place sits ON an avenue (a road line at x or z in ROAD_LINES), never
+// inside a building block, so cars and police can always reach it.
+export const PLACES = {
+  spawn: { x: 29, z: 120 },
+  marina: { x: -139, z: 152 },
+  garage: { x: 145, z: -40 },
+  docks: { x: 148, z: 150 },
+  northDrop: { x: -90, z: -160 },
+  bank: { x: 20, z: -90 },
+  safehouse: { x: -145, z: -20 },
+};
+
+export const SAVE_KEY = 'solmar-bay-save-v1';

@@ -1,203 +1,286 @@
-// Traffic, parked cars and the police: cars drive the street grid, turn at
-// intersections, queue behind each other; police cars chase the player when the
-// wanted level is up and ram them. All original arcade logic.
+// Solmar Bay — traffic and police.
+// Traffic cars cruise the avenue grid, turning at intersections. Police cars
+// spawn with the wanted level and chase the player down.
+
 import * as THREE from 'three';
-import { CAR, CITY_HALF, STREETS } from './config.js';
+import { ROAD_LINES } from './city.js';
+import { CAR, TRAFFIC, WANTED } from './config.js';
 import { makeCarMesh } from './actors.js';
 import { pick, range } from './rng.js';
 
-const CAR_COLORS = [0xc23b2e, 0x2e6fc2, 0xe8c33b, 0x3bc25a, 0x7a3bc2, 0xe8e8e8, 0x2c2c2c, 0xd97a2b, 0x3bc2c9];
-
-function laneOffset(axis, dir) {
-  // Right-hand traffic: offset 3 m to the right of the direction of travel.
-  return axis === 'x' ? 3 * dir : -3 * dir;
+function laneOffset(heading) {
+  // Right-hand traffic: 3.5 m to the right of the road centre.
+  return { x: Math.cos(heading) * 3.5, z: -Math.sin(heading) * 3.5 };
 }
 
-function headingFor(axis, dir) {
-  if (axis === 'x') return dir > 0 ? Math.PI / 2 : -Math.PI / 2;
-  return dir > 0 ? 0 : Math.PI;
-}
-
-function newCar(scene, rng, kind, color, pos, heading) {
-  const mesh = makeCarMesh(color, kind);
-  const car = {
-    kind, // 'traffic' | 'parked' | 'police'
-    owner: kind === 'police' ? 'police' : 'npc',
-    mesh,
-    pos: new THREE.Vector3(pos.x, 0, pos.z),
-    heading,
-    speed: 0,
-    axis: 'x',
-    street: 0,
-    dir: 1,
-    driver: null, // a ped riding along (traffic) or null
-    stolen: false,
-    ramCooldown: 0,
-    flash: 0,
-  };
-  mesh.group.traverse((o) => {
-    o.userData.carRef = car;
-  });
-  mesh.group.position.copy(car.pos);
-  mesh.group.rotation.y = heading;
-  scene.add(mesh.group);
-  return car;
-}
-
-export function spawnTrafficCar(scene, city, rng) {
-  const axis = rng() < 0.5 ? 'x' : 'z';
-  const street = pick(rng, STREETS);
-  const dir = rng() < 0.5 ? 1 : -1;
-  const along = range(rng, -150, 150);
-  const off = laneOffset(axis, dir);
-  const pos = axis === 'x' ? { x: along, z: street + off } : { x: street + off, z: along };
-  const car = newCar(scene, rng, 'traffic', pick(rng, CAR_COLORS), pos, headingFor(axis, dir));
-  car.axis = axis;
-  car.street = street;
-  car.dir = dir;
-  car.speed = range(rng, 7, CAR.trafficSpeed);
-  car.cruise = car.speed;
-  return car;
-}
-
-export function spawnParkedCar(scene, city, rng, pos) {
-  const p = pos ?? city.randomRoadPoint();
-  // randomRoadPoint gives a point on a street: {x: street, z: along} (the street
-  // runs along z) or {x: along, z: street} (it runs along x). Park parallel to
-  // that street, 4.6 m off its centre line, so the car is on the road, never
-  // inside a block.
-  const streetRunsAlongZ = STREETS.some((s) => Math.abs(s - p.x) < 0.001);
-  const street = streetRunsAlongZ ? p.x : p.z;
-  const along = streetRunsAlongZ ? p.z : p.x;
-  const axis = streetRunsAlongZ ? 'z' : 'x';
-  const at = streetRunsAlongZ
-    ? { x: street + 4.6, z: along }
-    : { x: along, z: street + 4.6 };
-  const car = newCar(scene, rng, 'parked', pick(rng, CAR_COLORS), at, headingFor(axis, rng() < 0.5 ? 1 : -1));
-  car.axis = axis;
-  car.street = street;
-  return car;
-}
-
-export function spawnPoliceCar(scene, rng, nearPos) {
-  const a = rng() * Math.PI * 2;
-  const r = range(rng, 55, 75);
-  const pos = {
-    x: Math.max(-160, Math.min(160, nearPos.x + Math.sin(a) * r)),
-    z: Math.max(-160, Math.min(160, nearPos.z + Math.cos(a) * r)),
-  };
-  const car = newCar(scene, rng, 'police', 0xf2f2f2, pos, 0);
-  car.speed = 12;
-  return car;
-}
-
-function nearestStreetCoord(v) {
-  let best = STREETS[0];
-  for (const s of STREETS) if (Math.abs(v - s) < Math.abs(v - best)) best = s;
+function nearestLine(v) {
+  let best = ROAD_LINES[0];
+  let bd = Infinity;
+  for (const line of ROAD_LINES) {
+    const d = Math.abs(v - line);
+    if (d < bd) {
+      bd = d;
+      best = line;
+    }
+  }
   return best;
 }
 
-function updateTrafficCar(car, cars, dt, rng) {
-  // Slow down for the car ahead on the same lane.
-  let target = car.cruise ?? CAR.trafficSpeed;
-  for (const other of cars) {
-    if (other === car || other.kind === 'parked') continue;
-    const dx = other.pos.x - car.pos.x;
-    const dz = other.pos.z - car.pos.z;
-    const ahead = Math.sin(car.heading) * dx + Math.cos(car.heading) * dz;
-    const side = Math.cos(car.heading) * dx - Math.sin(car.heading) * dz;
-    if (ahead > 0 && ahead < 11 && Math.abs(side) < 2.4) {
-      target = Math.min(target, other.speed);
+export class TrafficCar {
+  constructor(rng, scene) {
+    this.rng = rng;
+    this.mesh = makeCarMesh(pick(rng, CAR.colors));
+    this.pos = new THREE.Vector3();
+    this.heading = 0;
+    this.speed = 0;
+    this.targetSpeed = TRAFFIC.speed;
+    // Start on a random intersection, heading along a random road.
+    const ix = pick(rng, ROAD_LINES);
+    const iz = pick(rng, ROAD_LINES);
+    this.node = { x: ix, z: iz };
+    this.nextNode = this.randomNeighbour(this.node);
+    this.pos.set(ix, 0, iz);
+    this.mesh.position.copy(this.pos);
+    scene.add(this.mesh);
+  }
+
+  randomNeighbour(node) {
+    const options = [];
+    const xi = ROAD_LINES.indexOf(node.x);
+    const zi = ROAD_LINES.indexOf(node.z);
+    if (xi > 0) options.push({ x: ROAD_LINES[xi - 1], z: node.z });
+    if (xi < ROAD_LINES.length - 1) options.push({ x: ROAD_LINES[xi + 1], z: node.z });
+    if (zi > 0) options.push({ x: node.x, z: ROAD_LINES[zi - 1] });
+    if (zi < ROAD_LINES.length - 1) options.push({ x: node.x, z: ROAD_LINES[zi + 1] });
+    return pick(this.rng, options);
+  }
+
+  update(dt, playerPos, others) {
+    // Drive toward the next intersection.
+    const dx = this.nextNode.x - this.node.x;
+    const dz = this.nextNode.z - this.node.z;
+    const leg = Math.hypot(dx, dz);
+    const wantHeading = Math.atan2(dx, dz);
+    let dh = wantHeading - this.heading;
+    while (dh > Math.PI) dh -= Math.PI * 2;
+    while (dh < -Math.PI) dh += Math.PI * 2;
+    this.heading += Math.max(-2.2 * dt, Math.min(2.2 * dt, dh));
+
+    // Slow for the car ahead.
+    let blocked = false;
+    const aheadX = this.pos.x + Math.sin(this.heading) * 9;
+    const aheadZ = this.pos.z + Math.cos(this.heading) * 9;
+    for (const o of others) {
+      if (o === this) continue;
+      if (Math.hypot(o.pos.x - aheadX, o.pos.z - aheadZ) < 5) {
+        blocked = true;
+        break;
+      }
+    }
+    if (playerPos && Math.hypot(playerPos.x - aheadX, playerPos.z - aheadZ) < 5) blocked = true;
+    this.targetSpeed = blocked ? 0 : TRAFFIC.speed;
+    this.speed += (this.targetSpeed - this.speed) * Math.min(1, dt * 2);
+
+    const off = laneOffset(this.heading);
+    this.pos.x += Math.sin(this.heading) * this.speed * dt;
+    this.pos.z += Math.cos(this.heading) * this.speed * dt;
+    // Arrived at the next node?
+    const rx = this.nextNode.x + off.x - this.pos.x;
+    const rz = this.nextNode.z + off.z - this.pos.z;
+    if (Math.hypot(rx, rz) < 4) {
+      this.node = this.nextNode;
+      this.nextNode = this.randomNeighbour(this.node);
+    }
+    this.mesh.position.set(this.pos.x, 0, this.pos.z);
+    this.mesh.rotation.y = this.heading;
+    for (const w of this.mesh.userData.wheels) w.rotation.x += (this.speed * dt) / 0.36;
+  }
+
+  respawnNear(playerPos) {
+    const ix = nearestLine(playerPos.x + range(this.rng, -120, 120));
+    const iz = nearestLine(playerPos.z + range(this.rng, -120, 120));
+    this.node = { x: ix, z: iz };
+    this.nextNode = this.randomNeighbour(this.node);
+    this.pos.set(ix, 0, iz);
+    this.speed = 0;
+  }
+}
+
+function nearestNode(x, z) {
+  return { x: nearestLine(x), z: nearestLine(z) };
+}
+
+function neighboursOf(node) {
+  const options = [];
+  const xi = ROAD_LINES.indexOf(node.x);
+  const zi = ROAD_LINES.indexOf(node.z);
+  if (xi > 0) options.push({ x: ROAD_LINES[xi - 1], z: node.z });
+  if (xi < ROAD_LINES.length - 1) options.push({ x: ROAD_LINES[xi + 1], z: node.z });
+  if (zi > 0) options.push({ x: node.x, z: ROAD_LINES[zi - 1] });
+  if (zi < ROAD_LINES.length - 1) options.push({ x: node.x, z: ROAD_LINES[zi + 1] });
+  return options;
+}
+
+// The neighbour that gets closest to the target intersection (greedy
+// descent on the uniform road grid always reaches the target).
+function bestNeighbour(node, target) {
+  let best = null;
+  let bd = Infinity;
+  for (const n of neighboursOf(node)) {
+    const d = Math.hypot(n.x - target.x, n.z - target.z);
+    if (d < bd) {
+      bd = d;
+      best = n;
     }
   }
-  car.speed += Math.max(-8 * dt, Math.min(6 * dt, target - car.speed));
-  car.pos.x += Math.sin(car.heading) * car.speed * dt;
-  car.pos.z += Math.cos(car.heading) * car.speed * dt;
-  const along = car.axis === 'x' ? car.pos.x : car.pos.z;
-  // At an intersection, sometimes turn onto the crossing street.
-  for (const s of STREETS) {
-    if (Math.abs(along - s) < 1.0 && rng() < 0.012) {
-      const newAxis = car.axis === 'x' ? 'z' : 'x';
-      const newDir = rng() < 0.5 ? 1 : -1;
-      car.axis = newAxis;
-      car.street = s;
-      car.dir = newDir;
-      car.heading = headingFor(newAxis, newDir);
-      if (newAxis === 'x') car.pos.z = s + laneOffset('x', newDir);
-      else car.pos.x = s + laneOffset('z', newDir);
-      break;
+  return best;
+}
+
+export class PoliceCar {
+  constructor(rng, scene) {
+    this.rng = rng;
+    this.mesh = makeCarMesh(0xf2f2f2, true);
+    this.pos = new THREE.Vector3();
+    this.heading = 0;
+    this.speed = 0;
+    this.flashTimer = 0;
+    this.flashOn = false;
+    this.active = false;
+    // Pursuit runs on the road graph: the cruiser drives intersection to
+    // intersection toward the player, and only cuts across open ground when
+    // it is close. A beeline through the blocks gets stuck on buildings.
+    this.mode = 'road';
+    this.node = { x: 0, z: 0 };
+    this.nextNode = { x: 0, z: 0 };
+    this.stuckTimer = 0;
+    this.lastPos = new THREE.Vector3();
+    scene.add(this.mesh);
+  }
+
+  deploy(nearPos, heading) {
+    this.pos.set(nearPos.x, 0, nearPos.z);
+    this.heading = heading;
+    this.speed = 6;
+    this.active = true;
+    this.mesh.visible = true;
+    this.mode = 'road';
+    this.node = nearestNode(nearPos.x, nearPos.z);
+    this.nextNode = this.node;
+    this.stuckTimer = 0;
+    this.lastPos.copy(this.pos);
+  }
+
+  standDown() {
+    this.active = false;
+    this.mesh.visible = false;
+    this.speed = 0;
+  }
+
+  driveToward(dt, tx, tz, targetSpeed) {
+    const dx = tx - this.pos.x;
+    const dz = tz - this.pos.z;
+    const wantHeading = Math.atan2(dx, dz);
+    let dh = wantHeading - this.heading;
+    while (dh > Math.PI) dh -= Math.PI * 2;
+    while (dh < -Math.PI) dh += Math.PI * 2;
+    this.heading += Math.max(-2.6 * dt, Math.min(2.6 * dt, dh));
+    this.speed += (targetSpeed - this.speed) * Math.min(1, dt * 0.8);
+    this.pos.x += Math.sin(this.heading) * this.speed * dt;
+    this.pos.z += Math.cos(this.heading) * this.speed * dt;
+  }
+
+  pushOutOfBuildings(colliders) {
+    for (const c of colliders) {
+      if (this.pos.x > c.minX - 1.2 && this.pos.x < c.maxX + 1.2 && this.pos.z > c.minZ - 1.2 && this.pos.z < c.maxZ + 1.2) {
+        const pushL = this.pos.x - (c.minX - 1.2);
+        const pushR = c.maxX + 1.2 - this.pos.x;
+        const pushU = this.pos.z - (c.minZ - 1.2);
+        const pushD = c.maxZ + 1.2 - this.pos.z;
+        const m = Math.min(pushL, pushR, pushU, pushD);
+        if (m === pushL) this.pos.x = c.minX - 1.2;
+        else if (m === pushR) this.pos.x = c.maxX + 1.2;
+        else if (m === pushU) this.pos.z = c.minZ - 1.2;
+        else this.pos.z = c.maxZ + 1.2;
+        this.speed *= 0.5;
+      }
     }
   }
-  // At the city edge, turn around.
-  if (Math.abs(car.pos.x) > CITY_HALF - 6 || Math.abs(car.pos.z) > CITY_HALF - 6) {
-    car.dir *= -1;
-    car.heading = headingFor(car.axis, car.dir);
-    const off = laneOffset(car.axis, car.dir);
-    if (car.axis === 'x') car.pos.z = car.street + off;
-    else car.pos.x = car.street + off;
+
+  update(dt, playerPos, playerSpeed, stars, colliders) {
+    if (!this.active) return;
+    const targetSpeed = Math.min(WANTED.policeSpeed + stars * 1.5, 32);
+    const distToPlayer = Math.hypot(playerPos.x - this.pos.x, playerPos.z - this.pos.z);
+
+    if (this.mode === 'road') {
+      if (distToPlayer < 25) {
+        this.mode = 'direct';
+      } else {
+        // Arrived at the next intersection? Pick the next leg.
+        const rx = this.nextNode.x - this.pos.x;
+        const rz = this.nextNode.z - this.pos.z;
+        if (Math.hypot(rx, rz) < 5) {
+          this.node = this.nextNode;
+          this.nextNode = bestNeighbour(this.node, nearestNode(playerPos.x, playerPos.z)) || this.node;
+        }
+        const off = laneOffset(this.heading);
+        this.driveToward(dt, this.nextNode.x + off.x, this.nextNode.z + off.z, targetSpeed);
+      }
+    }
+    if (this.mode === 'direct') {
+      if (distToPlayer > 45) {
+        this.mode = 'road';
+        this.node = nearestNode(this.pos.x, this.pos.z);
+        this.nextNode = this.node;
+      } else {
+        // Close in slowly enough to actually pull up beside the player
+        // instead of orbiting past them at full speed.
+        const closeSpeed = Math.max(4, distToPlayer * 0.9);
+        const directTarget = Math.min(targetSpeed, closeSpeed);
+        const wantHeading = Math.atan2(playerPos.x - this.pos.x, playerPos.z - this.pos.z) + Math.sin(performance.now() / 700) * 0.08;
+        let dh = wantHeading - this.heading;
+        while (dh > Math.PI) dh -= Math.PI * 2;
+        while (dh < -Math.PI) dh += Math.PI * 2;
+        this.heading += Math.max(-2.6 * dt, Math.min(2.6 * dt, dh));
+        this.speed += (directTarget - this.speed) * Math.min(1, dt * 0.8);
+        this.pos.x += Math.sin(this.heading) * this.speed * dt;
+        this.pos.z += Math.cos(this.heading) * this.speed * dt;
+      }
+    }
+    this.pushOutOfBuildings(colliders);
+
+    // Stuck in direct mode (pinned against a building)? Fall back to roads.
+    if (this.mode === 'direct') {
+      if (Math.hypot(this.pos.x - this.lastPos.x, this.pos.z - this.lastPos.z) < 0.5) {
+        this.stuckTimer += dt;
+        if (this.stuckTimer > 2) {
+          this.stuckTimer = 0;
+          this.mode = 'road';
+          this.node = nearestNode(this.pos.x, this.pos.z);
+          this.nextNode = this.node;
+        }
+      } else {
+        this.stuckTimer = 0;
+      }
+      this.lastPos.copy(this.pos);
+    }
+
+    this.mesh.position.set(this.pos.x, 0, this.pos.z);
+    this.mesh.rotation.y = this.heading;
+    for (const w of this.mesh.userData.wheels) w.rotation.x += (this.speed * dt) / 0.36;
+    // Flash the light bar.
+    this.flashTimer += dt;
+    if (this.flashTimer > 0.28) {
+      this.flashTimer = 0;
+      this.flashOn = !this.flashOn;
+      const bar = this.mesh.userData.lightBar;
+      if (bar) {
+        bar.red.material.emissiveIntensity = this.flashOn ? 2.2 : 0.25;
+        bar.blue.material.emissiveIntensity = this.flashOn ? 0.25 : 2.2;
+      }
+    }
   }
-  car.mesh.group.position.copy(car.pos);
-  car.mesh.group.rotation.y = car.heading;
-  // Wheels spin with speed.
-  for (const w of car.mesh.wheels) w.rotation.x += (car.speed * dt) / 0.36;
-}
 
-function turnToward(current, target, maxStep) {
-  let d = target - current;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
-  return current + Math.max(-maxStep, Math.min(maxStep, d));
-}
-
-export function updatePoliceCar(car, playerPos, playerCar, dt, world) {
-  car.flash += dt;
-  const flashOn = Math.floor(car.flash * 6) % 2 === 0;
-  if (car.mesh.lightL) {
-    car.mesh.lightL.material.emissive.setHex(flashOn ? 0xff0000 : 0x330000);
-    car.mesh.lightR.material.emissive.setHex(flashOn ? 0x000033 : 0x0000ff);
-  }
-  const target = playerCar ? playerCar.pos : playerPos;
-  const dx = target.x - car.pos.x;
-  const dz = target.z - car.pos.z;
-  const dist = Math.hypot(dx, dz);
-  const desired = Math.atan2(dx, dz);
-  const maxTurn = (dist < 8 ? 3.4 : 2.2) * dt;
-  car.heading = turnToward(car.heading, desired, maxTurn);
-  // Cruisers chase cars and ram them. On foot, they close to 8 m and hold there —
-  // the foot chase belongs to the cops on foot — so a wanted player on foot can
-  // still lay low and cool the heat off instead of being run down forever.
-  const onFoot = !playerCar;
-  const want = onFoot ? (dist > 8 ? CAR.policeSpeed : 0) : dist > 10 ? CAR.policeSpeed : CAR.policeSpeed * 0.7;
-  car.speed += Math.max(-14 * dt, Math.min(12 * dt, want - car.speed));
-  car.pos.x += Math.sin(car.heading) * car.speed * dt;
-  car.pos.z += Math.cos(car.heading) * car.speed * dt;
-  world.city.collideCircle(car.pos, 1.6);
-  world.city.clampToCity(car.pos);
-  car.mesh.group.position.copy(car.pos);
-  car.mesh.group.rotation.y = car.heading;
-  for (const w of car.mesh.wheels) w.rotation.x += (car.speed * dt) / 0.36;
-  // Ram the player: damage + shove, with a per-car cooldown. Only against a
-  // car — on foot, cruisers hold off and let the foot cops do the chasing.
-  car.ramCooldown -= dt;
-  if (playerCar && dist < 4.2 && car.ramCooldown <= 0) {
-    car.ramCooldown = 0.9;
-    playerCar.speed *= 0.55;
-    world.damagePlayer(6, 'rammed by a police cruiser');
-    world.audio.crash();
+  distanceTo(p) {
+    return Math.hypot(this.pos.x - p.x, this.pos.z - p.z);
   }
 }
-
-export function updateTraffic(cars, dt, rng) {
-  for (const car of cars) {
-    if (car.kind === 'traffic') updateTrafficCar(car, cars, dt, rng);
-  }
-}
-
-// Keep the traffic count topped up: remove cars that drove far away is unnecessary
-// (they loop inside the city), so this only adds parked cars back after a theft.
-export function ensureParked(scene, city, rng, cars, want) {
-  const parked = cars.filter((c) => c.kind === 'parked').length;
-  for (let i = parked; i < want; i += 1) cars.push(spawnParkedCar(scene, city, rng));
-}
-
-export { nearestStreetCoord };

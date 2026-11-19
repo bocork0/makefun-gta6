@@ -1,114 +1,149 @@
-// The story: three chained missions in Solmar Bay, all original.
-// The mission object owns the current stage and marker; the world asks it
-// every step whether the stage is complete and advances it.
+// Solmar Bay — missions and the story.
+// Three jobs from Lena Cross. Each mission is a chain of steps; a glowing
+// beacon marks the current target and the HUD shows the objective.
+
+import * as THREE from 'three';
 import { MISSIONS, PLACES } from './config.js';
 
-export function createMissions() {
-  return {
-    index: 0, // 0..2, or 3 when the story is complete
-    stage: 0,
-    grabProgress: 0, // 0..1 while holding E on a 'grab' stage
-    packageHeld: false,
-    done: false,
-    current() {
-      return MISSIONS[this.index] ?? null;
-    },
-    stageDef() {
-      const m = this.current();
-      return m ? m.stages[this.stage] : null;
-    },
-    markerPlace() {
-      const s = this.stageDef();
-      return s ? PLACES[s.place] : null;
-    },
-    objectiveText() {
-      if (this.done) return 'Free roam — Solmar Bay is yours. Cause trouble or take it easy.';
-      const m = this.current();
-      const s = this.stageDef();
-      return `${m.title} — ${s.text}`;
-    },
-    // Distance from a position to the current marker, in metres.
-    markerDistance(pos) {
-      const p = this.markerPlace();
-      return p ? Math.hypot(pos.x - p.x, pos.z - p.z) : 0;
-    },
-    reset() {
-      this.index = 0;
-      this.stage = 0;
-      this.grabProgress = 0;
-      this.packageHeld = false;
-      this.done = false;
-    },
-  };
-}
+export class MissionDirector {
+  constructor(scene, onEvent) {
+    this.scene = scene;
+    this.onEvent = onEvent;
+    this.missionIndex = -1;
+    this.stepIndex = 0;
+    this.state = 'idle'; // idle | active | story-complete
+    this.holdProgress = 0;
+    this.target = null;
+    this.requiredCarId = null;
 
-// Advance the mission machine one step. `ctx` is the world (player, car,
-// position, wanted helpers). Returns an event string for the HUD when the
-// stage or mission completes: 'stage' | 'mission' | 'story' | null.
-export function updateMissions(missions, ctx) {
-  if (missions.done) return null;
-  const m = missions.current();
-  const s = missions.stageDef();
-  if (!m || !s) return null;
-  const place = PLACES[s.place];
-  const pos = ctx.playerPos();
-  const dist = Math.hypot(pos.x - place.x, pos.z - place.z);
-  const inCar = ctx.playerCar() !== null;
+    const beaconMat = new THREE.MeshBasicMaterial({
+      color: 0xffd23e, transparent: true, opacity: 0.16,
+      side: THREE.DoubleSide, depthWrite: false,
+    });
+    this.beacon = new THREE.Mesh(new THREE.CylinderGeometry(4.5, 4.5, 44, 24, 1, true), beaconMat);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xffd23e, transparent: true, opacity: 0.85,
+      side: THREE.DoubleSide, depthWrite: false,
+    });
+    this.ring = new THREE.Mesh(new THREE.RingGeometry(4.2, 5.4, 32), ringMat);
+    this.ring.rotation.x = -Math.PI / 2;
+    this.diamond = new THREE.Mesh(
+      new THREE.OctahedronGeometry(1.1),
+      new THREE.MeshBasicMaterial({ color: 0xffe97a }),
+    );
+    this.beacon.visible = false;
+    this.ring.visible = false;
+    this.diamond.visible = false;
+    scene.add(this.beacon, this.ring, this.diamond);
+    this.animTime = 0;
+  }
 
-  if (s.kind === 'go') {
-    if (dist < 6) {
-      missions.stage += 1;
-      return 'stage';
-    }
-    return null;
+  currentMission() {
+    return this.missionIndex >= 0 ? MISSIONS[this.missionIndex] : null;
   }
-  if (s.kind === 'deliverCar') {
-    if (inCar && dist < 7) {
-      missions.index += 1;
-      missions.stage = 0;
-      return 'mission';
-    }
-    return null;
+
+  currentStep() {
+    const m = this.currentMission();
+    return m ? m.steps[this.stepIndex] : null;
   }
-  if (s.kind === 'grab') {
-    if (dist < 5 && !inCar) {
-      if (m.id === 'the-vault-run') {
-        // Hold E to grab the cash; the world reports ctx.interactHeld.
-        if (ctx.interactHeld()) {
-          missions.grabProgress += ctx.dt / 3;
-          if (missions.grabProgress >= 1) {
-            missions.grabProgress = 0;
-            missions.stage += 1;
-            ctx.onVaultGrabbed();
-            return 'stage';
-          }
-        } else {
-          missions.grabProgress = Math.max(0, missions.grabProgress - ctx.dt / 2);
+
+  start() {
+    this.setMission(0);
+  }
+
+  setMission(index) {
+    if (index >= MISSIONS.length) {
+      this.state = 'story-complete';
+      this.hideMarker();
+      return;
+    }
+    this.missionIndex = index;
+    this.stepIndex = 0;
+    this.state = 'active';
+    this.holdProgress = 0;
+    const m = MISSIONS[index];
+    this.onEvent({ type: 'intro', text: m.intro, title: m.name });
+    this.applyStep();
+  }
+
+  applyStep() {
+    const step = this.currentStep();
+    if (!step) return;
+    const place = PLACES[step.at];
+    this.target = new THREE.Vector3(place.x, 0, place.z);
+    this.requiredCarId = null;
+    if (this.missionIndex === 0 && this.stepIndex === 1) this.requiredCarId = 'veloce';
+    this.beacon.position.set(this.target.x, 22, this.target.z);
+    this.ring.position.set(this.target.x, 0.06, this.target.z);
+    this.diamond.position.set(this.target.x, 7, this.target.z);
+    this.beacon.visible = true;
+    this.ring.visible = true;
+    this.diamond.visible = true;
+    this.onEvent({ type: 'step', text: step.text, title: this.currentMission().name });
+  }
+
+  hideMarker() {
+    this.beacon.visible = false;
+    this.ring.visible = false;
+    this.diamond.visible = false;
+    this.target = null;
+  }
+
+  objective() {
+    const m = this.currentMission();
+    if (!m || this.state !== 'active') return null;
+    const step = this.currentStep();
+    return {
+      title: `${m.name} — $${m.payout.toLocaleString()}`,
+      text: step.text,
+      hold: step.kind === 'hold' ? this.holdProgress : null,
+    };
+  }
+
+  update(dt, player) {
+    this.animTime += dt;
+    if (this.beacon.visible) {
+      this.diamond.position.y = 7 + Math.sin(this.animTime * 2) * 0.6;
+      this.diamond.rotation.y += dt * 1.5;
+      this.ring.material.opacity = 0.55 + Math.sin(this.animTime * 3) * 0.3;
+    }
+    if (this.state !== 'active' || !this.target) return;
+    const step = this.currentStep();
+    const dist = Math.hypot(player.pos.x - this.target.x, player.pos.z - this.target.z);
+
+    if (step.kind === 'hold') {
+      if (dist < 9) {
+        this.holdProgress += dt / step.holdSeconds;
+        if (this.holdProgress >= 1) {
+          this.holdProgress = 0;
+          this.advance(player);
         }
       } else {
-        // The package: walking into the marker picks it up.
-        missions.packageHeld = true;
-        missions.stage += 1;
-        ctx.onPackagePicked();
-        return 'stage';
+        this.holdProgress = Math.max(0, this.holdProgress - dt / 3);
+      }
+      return;
+    }
+    const radius = step.kind === 'deliver' ? 8 : 6;
+    if (dist < radius) {
+      if (this.requiredCarId && player.carId !== this.requiredCarId) {
+        this.onEvent({ type: 'hint', text: 'You need the red Veloce for this delivery.' });
+        return;
+      }
+      this.advance(player);
+    }
+  }
+
+  advance(player) {
+    const m = this.currentMission();
+    this.stepIndex += 1;
+    if (this.stepIndex >= m.steps.length) {
+      this.onEvent({ type: 'complete', title: m.name, payout: m.payout });
+      this.setMission(this.missionIndex + 1);
+      if (this.state === 'story-complete') {
+        this.onEvent({ type: 'story', text: 'The vault money is yours. Solmar Bay is yours now, Dario.' });
       }
     } else {
-      missions.grabProgress = Math.max(0, missions.grabProgress - ctx.dt / 2);
+      this.applyStep();
     }
-    return null;
   }
-  if (s.kind === 'deliver') {
-    if (dist < 7) {
-      missions.index += 1;
-      missions.stage = 0;
-      missions.packageHeld = false;
-      if (missions.index >= MISSIONS.length) {
-        missions.done = true;
-        return 'story';
-      }
-      return 'mission';
-    }
-    return null;
-  }
-  return null;
 }

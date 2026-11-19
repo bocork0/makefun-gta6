@@ -1,157 +1,84 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Solmar Bay — an open-world crime story</title>
+<title>Solmar Bay — Open-World Crime Game</title>
 <style>
-  :root {
-    --ink: #f2ede0;
-    --muted: #c9c2ae;
-    --accent: #ffc94d;
-    --danger: #ff5a4d;
-    --panel: rgba(16, 20, 28, 0.78);
-    --hairline: rgba(255, 255, 255, 0.22);
-    --font-ui: system-ui, -apple-system, 'Segoe UI', sans-serif;
-    --font-readout: ui-monospace, 'SF Mono', Menlo, monospace;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #2a4a63; color: var(--ink); font-family: var(--font-ui); }
-  #game, #game canvas { position: fixed; inset: 0; display: block; }
-  #hud { position: fixed; inset: 0; pointer-events: none; }
-  [hidden] { display: none !important; }
-
-  #topleft { position: fixed; top: 16px; left: 18px; display: grid; gap: 6px; }
-  #money { font-family: var(--font-readout); font-size: 26px; color: var(--accent); text-shadow: 0 1px 8px rgba(0,0,0,.8); }
-  #stars { font-size: 24px; letter-spacing: 4px; color: var(--accent); text-shadow: 0 1px 8px rgba(0,0,0,.8); min-height: 30px; }
-  #stars .off { color: rgba(255,255,255,.25); }
-  #health-wrap { width: 220px; }
-  #health-bar { height: 12px; background: rgba(0,0,0,.55); border: 1px solid var(--hairline); border-radius: 3px; overflow: hidden; }
-  #health-fill { height: 100%; width: 100%; background: #7dd87d; }
-  #health-fill.low { background: var(--danger); }
-  #health-line { display: flex; gap: 8px; font-family: var(--font-readout); font-size: 13px; color: var(--muted); margin-top: 2px; text-shadow: 0 1px 6px rgba(0,0,0,.9); }
-
-  #objective { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); max-width: 560px; text-align: center;
-    background: var(--panel); border: 1px solid var(--hairline); border-radius: 6px; padding: 9px 16px; font-size: 14px; line-height: 1.4; }
-  #objective b { color: var(--accent); }
-  #objective-dist { font-family: var(--font-readout); color: var(--muted); font-size: 12px; }
-
-  #minimap { position: fixed; top: 16px; right: 18px; width: 200px; height: 200px; border: 1px solid var(--hairline); border-radius: 6px; background: #233038; }
-  #minimap-label { position: fixed; top: 222px; right: 18px; width: 200px; text-align: center; font-family: var(--font-readout); font-size: 11px; letter-spacing: .14em; color: var(--muted); text-shadow: 0 1px 6px rgba(0,0,0,.9); }
-
-  #crosshair { position: fixed; left: 50%; top: 50%; width: 0; height: 0; }
-  #crosshair i { position: absolute; background: var(--ink); opacity: .9; box-shadow: 0 0 4px #000; }
-  #crosshair i:nth-child(1) { left: -1px; top: -11px; width: 2px; height: 7px; }
-  #crosshair i:nth-child(2) { left: -1px; top: 4px; width: 2px; height: 7px; }
-  #crosshair i:nth-child(3) { top: -1px; left: -11px; height: 2px; width: 7px; }
-  #crosshair i:nth-child(4) { top: -1px; left: 4px; height: 2px; width: 7px; }
-
-  #prompt { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); font-size: 15px; padding: 8px 14px;
-    background: var(--panel); border: 1px solid var(--hairline); border-radius: 6px; }
-  #grab { position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%); width: 260px; text-align: center; }
-  #grab-bar { height: 8px; background: rgba(0,0,0,.55); border: 1px solid var(--hairline); border-radius: 2px; overflow: hidden; }
-  #grab-fill { height: 100%; width: 0; background: var(--accent); }
-  #grab-label { margin-top: 4px; font-family: var(--font-readout); font-size: 12px; letter-spacing: .12em; color: var(--accent); }
-
-  #toast { position: fixed; left: 50%; top: 96px; transform: translateX(-50%); font-size: 15px; padding: 8px 16px;
-    background: var(--panel); border: 1px solid var(--hairline); border-radius: 6px; }
-  #banner { position: fixed; left: 50%; top: 30%; transform: translateX(-50%); text-align: center; }
-  #banner-title { font-size: 52px; font-weight: 700; letter-spacing: .02em; text-shadow: 0 2px 18px rgba(0,0,0,.8); }
-  #banner-sub { margin-top: 8px; font-size: 17px; color: var(--muted); text-shadow: 0 1px 10px rgba(0,0,0,.8); }
-
-  #damage { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 180ms linear; box-shadow: inset 0 0 120px 40px rgba(255,60,40,.55); }
-  #damage.on { opacity: 1; }
-  #wanted-flash { position: fixed; inset: 0; pointer-events: none; opacity: 0; box-shadow: inset 0 0 140px 30px rgba(40,80,255,.35); }
-  #wanted-flash.on { opacity: 1; }
-
-  .overlay { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(10, 16, 24, 0.72); pointer-events: auto; z-index: 5; }
-  .panel { width: min(560px, 100%); padding: 32px; background: #1b212b; border: 1px solid var(--hairline); border-radius: 8px; }
-  .panel h1 { margin: 0 0 4px; font-size: 44px; line-height: 1.05; letter-spacing: -0.01em; }
-  .panel h1 span { color: var(--accent); }
-  .panel h2 { margin: 0 0 8px; font-size: 30px; }
-  .panel p { margin: 0 0 18px; font-size: 15px; line-height: 1.55; color: var(--muted); }
-  .panel .btn { font: inherit; font-weight: 600; padding: 12px 18px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: #1b212b; cursor: pointer; margin-right: 8px; }
-  .panel .btn.ghost { background: transparent; color: var(--ink); border-color: var(--hairline); }
-  .panel .btn:hover { filter: brightness(1.1); }
-  .keys { margin: 20px 0 0; padding: 0; list-style: none; display: grid; gap: 7px; font-size: 14px; color: var(--muted); }
-  .keys li { display: flex; align-items: center; gap: 8px; }
-  .keys kbd { min-width: 24px; padding: 2px 7px; border: 1px solid var(--hairline); border-radius: 4px; font-family: var(--font-readout); font-size: 12px; color: var(--ink); text-align: center; }
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0a121a; height: 100%; font-family: 'Segoe UI', Arial, sans-serif; }
+  #game-canvas { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; display: none; }
+  .panel { background: rgba(8, 16, 24, 0.72); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px; padding: 10px 14px; backdrop-filter: blur(2px); }
+  #objective { position: absolute; top: 14px; left: 14px; max-width: 340px; }
+  #objective-title { font-weight: 700; font-size: 15px; color: #ffd23e; letter-spacing: 0.4px; }
+  #objective-text { font-size: 13px; margin-top: 4px; line-height: 1.35; }
+  #objective-hold { display: none; margin-top: 8px; height: 8px; background: rgba(255,255,255,0.18); border-radius: 4px; overflow: hidden; }
+  #objective-hold-fill { height: 100%; width: 0%; background: #ffd23e; }
+  #stats { position: absolute; top: 14px; right: 14px; text-align: right; }
+  #money { font-size: 26px; font-weight: 800; color: #7ddf8a; text-shadow: 0 2px 6px rgba(0,0,0,0.6); }
+  #stars { font-size: 22px; letter-spacing: 2px; color: #ffd23e; margin-top: 2px; }
+  #stars.hot { color: #ff5346; animation: blink 0.7s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0.45; } }
+  #messages { position: absolute; top: 84px; left: 50%; transform: translateX(-50%); width: 560px; text-align: center; }
+  .msg { background: rgba(8, 16, 24, 0.78); border-left: 3px solid #ffd23e; padding: 8px 12px; margin: 6px auto; border-radius: 6px; font-size: 14px; text-align: left; transition: opacity 0.6s; }
+  .msg.fade { opacity: 0; }
+  #health { position: absolute; left: 14px; bottom: 14px; width: 220px; }
+  #health-label { font-size: 11px; letter-spacing: 1px; color: #cfe3ef; margin-bottom: 4px; }
+  #health-bar { height: 12px; background: rgba(255,255,255,0.16); border-radius: 6px; overflow: hidden; }
+  #health-fill { height: 100%; width: 100%; background: #58c96b; }
+  #health-fill.low { background: #ff5346; }
+  #health-text { font-size: 12px; margin-top: 3px; }
+  #speed { position: absolute; right: 14px; bottom: 208px; text-align: right; display: none; }
+  #speed-value { font-size: 34px; font-weight: 800; line-height: 1; }
+  #speed-unit { font-size: 12px; color: #cfe3ef; }
+  #minimap { position: absolute; right: 14px; bottom: 14px; width: 180px; height: 180px; border: 1px solid rgba(255,255,255,0.25); border-radius: 8px; }
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border: 2px solid rgba(255,255,255,0.85); border-radius: 50%; box-shadow: 0 0 4px rgba(0,0,0,0.8); }
+  #hint { position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%); font-size: 15px; font-weight: 700; color: #ffd23e; text-shadow: 0 2px 4px rgba(0,0,0,0.8); opacity: 0; transition: opacity 0.2s; }
+  #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(4, 10, 16, 0.55); z-index: 10; }
+  #menu-card { background: rgba(8, 18, 28, 0.94); border: 1px solid rgba(255, 210, 62, 0.4); border-radius: 14px; padding: 34px 44px; max-width: 560px; text-align: center; color: #fff; box-shadow: 0 12px 48px rgba(0,0,0,0.6); }
+  #menu-title { font-size: 42px; font-weight: 900; letter-spacing: 3px; color: #ffd23e; margin: 0 0 10px; }
+  #menu-body { font-size: 15px; line-height: 1.55; color: #d8e6ef; margin: 0 0 22px; }
+  #menu-buttons button { display: block; width: 100%; margin: 8px 0; padding: 12px 18px; font-size: 16px; font-weight: 700; color: #08121c; background: #ffd23e; border: none; border-radius: 8px; cursor: pointer; }
+  #menu-buttons button:hover { background: #ffe27a; }
 </style>
-</head>
-<body>
-<div id="game"></div>
-
-<div id="hud" aria-hidden="true">
-  <div id="topleft">
-    <div id="money">$0</div>
-    <div id="stars"></div>
-    <div id="health-wrap">
-      <div id="health-bar"><div id="health-fill"></div></div>
-      <div id="health-line"><span id="health-num">100</span><span>HEALTH</span><span id="wanted-label"></span></div>
-    </div>
-  </div>
-  <div id="objective"><b id="objective-title"></b><div id="objective-text"></div><div id="objective-dist"></div></div>
-  <canvas id="minimap" width="200" height="200"></canvas>
-  <div id="minimap-label">SOLMAR BAY</div>
-  <div id="crosshair" hidden><i></i><i></i><i></i><i></i></div>
-  <div id="prompt" hidden></div>
-  <div id="grab" hidden>
-    <div id="grab-bar"><div id="grab-fill"></div></div>
-    <div id="grab-label">GRABBING THE CASH… HOLD E</div>
-  </div>
-  <div id="toast" hidden></div>
-  <div id="banner" hidden><div id="banner-title"></div><div id="banner-sub"></div></div>
-  <div id="damage"></div>
-  <div id="wanted-flash"></div>
-</div>
-
-<div id="title-overlay" class="overlay">
-  <section class="panel" role="dialog" aria-modal="true" aria-labelledby="title-h">
-    <h1 id="title-h">SOLMAR <span>BAY</span></h1>
-    <p>An original open-world crime story in a sun-soaked bay city. You are <b>Dario Venn</b>, a wheelman
-    trying to go straight — until Lena Cross offers him three jobs he cannot refuse. Walk the streets,
-    steal cars, outrun the Solmar Bay Police, and pull off the Vault Run.</p>
-    <button id="btn-start" class="btn" type="button">New story</button>
-    <button id="btn-continue" class="btn ghost" type="button" hidden>Continue</button>
-    <ul class="keys">
-      <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Move / drive &nbsp; <kbd>Shift</kbd> Run</li>
-      <li><kbd>Mouse drag</kbd> Look &nbsp; <kbd>←</kbd><kbd>→</kbd> Turn camera</li>
-      <li><kbd>E</kbd> Enter / exit car &nbsp; <kbd>Click</kbd> Shoot &nbsp; <kbd>F</kbd> Punch</li>
-      <li><kbd>P</kbd> Pause &nbsp; <kbd>Space</kbd> Handbrake (in car)</li>
-    </ul>
-    <p style="margin-top:18px;font-size:12px;">All characters, places, art and music are original works made for this game. No real-world brands, no licensed material.</p>
-  </section>
-</div>
-
-<div id="pause-overlay" class="overlay" hidden>
-  <section class="panel" role="dialog" aria-modal="true">
-    <h2>Paused</h2>
-    <p id="pause-copy">Take a breath. Solmar Bay will wait.</p>
-    <button id="btn-resume" class="btn" type="button">Resume</button>
-    <button id="btn-save" class="btn ghost" type="button">Save game</button>
-    <button id="btn-restart" class="btn ghost" type="button">Restart story</button>
-    <button id="btn-quit" class="btn ghost" type="button">Quit to title</button>
-  </section>
-</div>
-
-<div id="over-overlay" class="overlay" hidden>
-  <section class="panel" role="dialog" aria-modal="true">
-    <h2 id="over-title">WASTED</h2>
-    <p id="over-copy"></p>
-    <button id="btn-retry" class="btn" type="button">Respawn — $100</button>
-    <button id="btn-title" class="btn ghost" type="button">Quit to title</button>
-  </section>
-</div>
-
-<p id="status" role="status" aria-live="polite"></p>
 <script type="importmap">
 {
   "imports": {
-    "three": "./vendor/three/three.module.min.js"
+    "three": "./vendor/three.module.min.js"
   }
 }
 </script>
+</head>
+<body>
+<canvas id="game-canvas"></canvas>
+<div id="hud">
+  <div id="objective" class="panel">
+    <div id="objective-title">Free roam</div>
+    <div id="objective-text"></div>
+    <div id="objective-hold"><div id="objective-hold-fill"></div></div>
+  </div>
+  <div id="stats" class="panel">
+    <div id="money">$0</div>
+    <div id="stars">☆☆☆☆☆</div>
+  </div>
+  <div id="messages"></div>
+  <div id="health" class="panel">
+    <div id="health-label">HEALTH</div>
+    <div id="health-bar"><div id="health-fill"></div></div>
+    <div id="health-text">100</div>
+  </div>
+  <div id="speed" class="panel"><span id="speed-value">0</span> <span id="speed-unit">km/h</span></div>
+  <canvas id="minimap" width="180" height="180"></canvas>
+  <div id="crosshair"></div>
+  <div id="hint"></div>
+</div>
+<div id="menu">
+  <div id="menu-card">
+    <h1 id="menu-title">SOLMAR BAY</h1>
+    <p id="menu-body"></p>
+    <div id="menu-buttons"></div>
+  </div>
+</div>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

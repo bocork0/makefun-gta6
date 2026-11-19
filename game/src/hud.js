@@ -1,200 +1,233 @@
-// HUD: DOM readouts (money, wanted stars, health, objective), the 2D canvas
-// minimap, prompts, toasts, banners and the title / pause / game-over overlays.
-import { CITY_HALF, STREETS } from './config.js';
+// Solmar Bay — HUD, minimap and menus.
+// All DOM work lives here; the world only calls setters and reads button
+// actions, so the game logic never touches document directly.
 
-const $ = (id) => document.getElementById(id);
+import { ROAD_LINES, BLOCK_CENTERS, BOUNDS } from './city.js';
 
-export function createHud() {
-  const els = {
-    money: $('money'),
-    stars: $('stars'),
-    healthFill: $('health-fill'),
-    healthNum: $('health-num'),
-    wantedLabel: $('wanted-label'),
-    objTitle: $('objective-title'),
-    objText: $('objective-text'),
-    objDist: $('objective-dist'),
-    minimap: $('minimap'),
-    crosshair: $('crosshair'),
-    prompt: $('prompt'),
-    grab: $('grab'),
-    grabFill: $('grab-fill'),
-    toast: $('toast'),
-    banner: $('banner'),
-    bannerTitle: $('banner-title'),
-    bannerSub: $('banner-sub'),
-    damage: $('damage'),
-    wantedFlash: $('wanted-flash'),
-    titleOverlay: $('title-overlay'),
-    pauseOverlay: $('pause-overlay'),
-    overOverlay: $('over-overlay'),
-    overTitle: $('over-title'),
-    overCopy: $('over-copy'),
-    btnContinue: $('btn-continue'),
-    status: $('status'),
-  };
-  const mm = els.minimap.getContext('2d');
-  let toastTimer = 0;
-  let bannerTimer = 0;
-  let damageTimer = 0;
+export class HUD {
+  constructor(actions) {
+    this.actions = actions;
+    const $ = (id) => document.getElementById(id);
+    this.el = {
+      hud: $('hud'),
+      money: $('money'),
+      stars: $('stars'),
+      healthFill: $('health-fill'),
+      healthText: $('health-text'),
+      objTitle: $('objective-title'),
+      objText: $('objective-text'),
+      objHold: $('objective-hold'),
+      objHoldFill: $('objective-hold-fill'),
+      speed: $('speed'),
+      speedValue: $('speed-value'),
+      minimap: $('minimap'),
+      messages: $('messages'),
+      menu: $('menu'),
+      menuTitle: $('menu-title'),
+      menuBody: $('menu-body'),
+      menuButtons: $('menu-buttons'),
+      hint: $('hint'),
+    };
+    this.mapCtx = this.el.minimap.getContext('2d');
+    this.messageTimer = null;
+    this.bindMenuButtons();
+  }
 
-  function starHtml(wanted) {
+  bindMenuButtons() {
+    this.el.menuButtons.addEventListener('click', (e) => {
+      const action = e.target?.dataset?.action;
+      if (!action) return;
+      if (this.actions[action]) this.actions[action]();
+    });
+  }
+
+  setMoney(amount) {
+    this.el.money.textContent = `$${amount.toLocaleString()}`;
+  }
+
+  setWanted(stars) {
     let s = '';
-    for (let i = 0; i < 5; i += 1) {
-      s += `<span class="${i < wanted ? '' : 'off'}">★</span>`;
-    }
-    return s;
+    for (let i = 0; i < 5; i++) s += i < stars ? '★' : '☆';
+    this.el.stars.textContent = s;
+    this.el.stars.classList.toggle('hot', stars > 0);
   }
 
-  function drawMinimap(state) {
-    const W = 200;
-    const H = 200;
-    const toPx = (v) => ((v + CITY_HALF + 12) / ((CITY_HALF + 12) * 2)) * W;
-    mm.fillStyle = '#1d2b33';
-    mm.fillRect(0, 0, W, H);
-    // Water + beach on the south edge.
-    mm.fillStyle = '#3f8fb5';
-    mm.fillRect(0, toPx(152), W, H - toPx(152));
-    mm.fillStyle = '#efe0b0';
-    mm.fillRect(0, toPx(150), W, 3);
-    // Blocks.
-    mm.fillStyle = '#4a5a52';
-    for (let i = 0; i < STREETS.length - 1; i += 1) {
-      for (let j = 0; j < STREETS.length - 1; j += 1) {
-        mm.fillRect(toPx(STREETS[i] + 6), toPx(STREETS[j] + 6), toPx(STREETS[i + 1] - 6) - toPx(STREETS[i] + 6), toPx(STREETS[j + 1] - 6) - toPx(STREETS[j] + 6));
-      }
+  setHealth(hp) {
+    const pct = Math.max(0, Math.min(100, hp));
+    this.el.healthFill.style.width = `${pct}%`;
+    this.el.healthText.textContent = `${Math.ceil(pct)}`;
+    this.el.healthFill.classList.toggle('low', pct <= 25);
+  }
+
+  setObjective(obj, distance) {
+    if (!obj) {
+      this.el.objTitle.textContent = 'Free roam';
+      this.el.objText.textContent = 'Explore Solmar Bay. Talk to Lena for work — missions pay.';
+      this.el.objHold.style.display = 'none';
+      return;
     }
+    this.el.objTitle.textContent = obj.title;
+    const dist = distance != null ? ` — ${Math.round(distance)}m` : '';
+    this.el.objText.textContent = obj.text + dist;
+    if (obj.hold != null) {
+      this.el.objHold.style.display = 'block';
+      this.el.objHoldFill.style.width = `${Math.round(obj.hold * 100)}%`;
+    } else {
+      this.el.objHold.style.display = 'none';
+    }
+  }
+
+  setSpeed(kmh, inCar) {
+    this.el.speed.style.display = inCar ? 'block' : 'none';
+    this.el.speedValue.textContent = `${Math.round(kmh)}`;
+  }
+
+  setHint(text) {
+    this.el.hint.textContent = text || '';
+    this.el.hint.style.opacity = text ? '1' : '0';
+  }
+
+  message(text, ms = 4200) {
+    const div = document.createElement('div');
+    div.className = 'msg';
+    div.textContent = text;
+    this.el.messages.appendChild(div);
+    while (this.el.messages.children.length > 3) {
+      this.el.messages.removeChild(this.el.messages.firstChild);
+    }
+    setTimeout(() => div.classList.add('fade'), ms - 600);
+    setTimeout(() => div.remove(), ms);
+  }
+
+  drawMinimap(state) {
+    const ctx = this.mapCtx;
+    const W = 180;
+    const H = 180;
+    const span = BOUNDS.maxX - BOUNDS.minX;
+    const toMap = (x, z) => [
+      ((x - BOUNDS.minX) / span) * W,
+      ((z - BOUNDS.minZ) / (BOUNDS.maxZ - BOUNDS.minZ)) * H,
+    ];
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(10, 18, 26, 0.85)';
+    ctx.fillRect(0, 0, W, H);
+    // Sea + beach at the bottom.
+    const [, seaY] = toMap(0, 210);
+    ctx.fillStyle = '#2e7f9e';
+    ctx.fillRect(0, seaY, W, H - seaY);
+    ctx.fillStyle = '#e0c98f';
+    ctx.fillRect(0, seaY - 4, W, 4);
     // Roads.
-    mm.fillStyle = '#6a7076';
-    for (const s of STREETS) {
-      mm.fillRect(toPx(s - 6), 0, toPx(s + 6) - toPx(s - 6), H);
-      mm.fillRect(0, toPx(s - 6), W, toPx(s + 6) - toPx(s - 6));
+    ctx.strokeStyle = '#5a6270';
+    ctx.lineWidth = 3;
+    for (const line of ROAD_LINES) {
+      const [x] = toMap(line, 0);
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, H);
+      ctx.stroke();
+      const [, z] = toMap(0, line);
+      ctx.beginPath();
+      ctx.moveTo(0, z);
+      ctx.lineTo(W, z);
+      ctx.stroke();
     }
-    // Mission marker: pulsing yellow diamond.
-    const marker = state.missionMarker;
-    if (marker) {
-      const pulse = 6 + Math.sin(state.time * 5) * 2;
-      mm.fillStyle = '#ffc94d';
-      const mx = toPx(marker.x);
-      const my = toPx(marker.z);
-      mm.beginPath();
-      mm.moveTo(mx, my - pulse);
-      mm.lineTo(mx + pulse, my);
-      mm.lineTo(mx, my + pulse);
-      mm.lineTo(mx - pulse, my);
-      mm.closePath();
-      mm.fill();
+    // Blocks.
+    ctx.fillStyle = '#3a4552';
+    for (const bx of BLOCK_CENTERS) {
+      for (const bz of BLOCK_CENTERS) {
+        const [x, z] = toMap(bx - 22, bz - 22);
+        ctx.fillRect(x, z, (44 / span) * W, (44 / (BOUNDS.maxZ - BOUNDS.minZ)) * H);
+      }
     }
-    // Police cars: red dots.
-    mm.fillStyle = '#ff5a4d';
-    for (const p of state.police) mm.fillRect(toPx(p.x) - 2, toPx(p.z) - 2, 4, 4);
-    // Traffic: pale dots.
-    mm.fillStyle = 'rgba(242,237,224,0.75)';
-    for (const c of state.traffic) mm.fillRect(toPx(c.x) - 1.5, toPx(c.z) - 1.5, 3, 3);
-    // Player: white arrow pointing along the heading (map: +x right, +z down).
-    const px = toPx(state.player.x);
-    const py = toPx(state.player.z);
-    mm.save();
-    mm.translate(px, py);
-    mm.rotate(Math.PI - state.playerHeading);
-    mm.fillStyle = '#ffffff';
-    mm.beginPath();
-    mm.moveTo(0, -7);
-    mm.lineTo(5, 6);
-    mm.lineTo(0, 3);
-    mm.lineTo(-5, 6);
-    mm.closePath();
-    mm.fill();
-    mm.restore();
-    // View cone hint.
-    mm.strokeStyle = 'rgba(255,255,255,0.35)';
-    const viewAngle = Math.PI / 2 - state.playerHeading;
-    mm.beginPath();
-    mm.arc(px, py, 14, viewAngle - 0.5, viewAngle + 0.5);
-    mm.stroke();
+    // Mission target.
+    if (state.missionTarget) {
+      const [x, z] = toMap(state.missionTarget.x, state.missionTarget.z);
+      ctx.fillStyle = '#ffd23e';
+      ctx.beginPath();
+      ctx.moveTo(x, z - 7);
+      ctx.lineTo(x + 6, z);
+      ctx.lineTo(x, z + 7);
+      ctx.lineTo(x - 6, z);
+      ctx.closePath();
+      ctx.fill();
+    }
+    // Police.
+    for (const p of state.police) {
+      const [x, z] = toMap(p.x, p.z);
+      ctx.fillStyle = '#ff4444';
+      ctx.beginPath();
+      ctx.arc(x, z, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Player arrow.
+    const [px, pz] = toMap(state.playerX, state.playerZ);
+    ctx.save();
+    ctx.translate(px, pz);
+    ctx.rotate(state.heading);
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(0, -7);
+    ctx.lineTo(5, 6);
+    ctx.lineTo(-5, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   }
 
-  return {
-    els,
-    drawMinimap,
-    showTitle(saveExists) {
-      els.titleOverlay.hidden = false;
-      els.pauseOverlay.hidden = true;
-      els.overOverlay.hidden = true;
-      els.btnContinue.hidden = !saveExists;
-    },
-    showPause() {
-      els.pauseOverlay.hidden = false;
-    },
-    hidePause() {
-      els.pauseOverlay.hidden = true;
-    },
-    showGameOver(kind, detail) {
-      els.overTitle.textContent = kind;
-      els.overCopy.textContent = detail;
-      els.overOverlay.hidden = false;
-    },
-    hideOverlays() {
-      els.titleOverlay.hidden = true;
-      els.pauseOverlay.hidden = true;
-      els.overOverlay.hidden = true;
-    },
-    toast(text, seconds = 3) {
-      els.toast.textContent = text;
-      els.toast.hidden = false;
-      toastTimer = seconds;
-    },
-    banner(title, sub, seconds = 3.5) {
-      els.bannerTitle.textContent = title;
-      els.bannerSub.textContent = sub;
-      els.banner.hidden = false;
-      bannerTimer = seconds;
-    },
-    flashDamage() {
-      els.damage.classList.add('on');
-      damageTimer = 0.35;
-    },
-    announce(text) {
-      els.status.textContent = text;
-    },
-    update(state, dt) {
-      if (toastTimer > 0) {
-        toastTimer -= dt;
-        if (toastTimer <= 0) els.toast.hidden = true;
-      }
-      if (bannerTimer > 0) {
-        bannerTimer -= dt;
-        if (bannerTimer <= 0) els.banner.hidden = true;
-      }
-      if (damageTimer > 0) {
-        damageTimer -= dt;
-        if (damageTimer <= 0) els.damage.classList.remove('on');
-      }
-      els.money.textContent = `$${state.money.toLocaleString('en-US')}`;
-      els.stars.innerHTML = starHtml(state.wanted);
-      els.wantedLabel.textContent = state.wanted > 0 ? `· WANTED ${state.wanted}★` : '';
-      const hp = Math.max(0, Math.round(state.hp));
-      els.healthFill.style.width = `${hp}%`;
-      els.healthFill.classList.toggle('low', hp <= 30);
-      els.healthNum.textContent = String(hp);
-      els.objTitle.textContent = state.missionTitle;
-      els.objText.textContent = state.objective;
-      els.objDist.textContent = state.missionDist != null ? `${Math.round(state.missionDist)} m` : '';
-      els.crosshair.hidden = state.inCar || !state.playing;
-      els.wantedFlash.classList.toggle('on', state.wanted >= 3 && Math.floor(state.time * 2) % 2 === 0);
-      if (state.prompt) {
-        els.prompt.textContent = state.prompt;
-        els.prompt.hidden = false;
-      } else {
-        els.prompt.hidden = true;
-      }
-      if (state.grabProgress > 0) {
-        els.grab.hidden = false;
-        els.grabFill.style.width = `${Math.round(state.grabProgress * 100)}%`;
-      } else {
-        els.grab.hidden = true;
-      }
-      drawMinimap(state);
-    },
-  };
+  showMenu(kind, data = {}) {
+    const m = this.el.menu;
+    m.style.display = 'flex';
+    this.el.hud.style.display = kind === 'title' ? 'none' : 'flex';
+    const buttons = {
+      title: [
+        ['new', 'New Game'],
+        ...(data.hasSave ? [['continue', 'Continue']] : []),
+        ['howto', 'How to play'],
+      ],
+      pause: [
+        ['resume', 'Resume'],
+        ['save', 'Save game'],
+        ['restart', 'Restart story'],
+        ['quit', 'Quit to title'],
+      ],
+      wasted: [['respawn', 'Wake up at the hospital (-$100)']],
+      busted: [['respawn', 'Pay the fine and walk free (-$200)']],
+      story: [['freeroam', 'Keep exploring Solmar Bay']],
+      howto: [['back', 'Back']],
+    }[kind];
+    const titles = {
+      title: 'SOLMAR BAY',
+      pause: 'Paused',
+      wasted: 'WASTED',
+      busted: 'BUSTED',
+      story: 'SOLMAR BAY — Story complete',
+      howto: 'How to play',
+    };
+    const bodies = {
+      title:
+        'A sun-soaked coastal city. You are Dario Venn, fresh out of the joint, ' +
+        'and Lena Cross has work for you — three jobs, one vault, and a way out. ' +
+        'Steal cars, dodge the Solmar Bay PD, and get paid.',
+      pause: 'Take a breath. The city waits.',
+      wasted: 'You got yourself killed out there. The hospital patched you up — the bill is on you.',
+      busted: 'The Solmar Bay PD caught you. The fine is on you.',
+      story:
+        `You cracked the vault and walked away with the money. Final take: $${(data.money ?? 0).toLocaleString()}. ` +
+        'Lena is proud of you. Solmar Bay is yours now.',
+      howto:
+        'WASD — walk / drive • Shift — sprint • E — enter / exit a car • Mouse click — punch or shoot • ' +
+        'Drag mouse — look around • P or Esc — pause • M — mute • Stealing a car, shooting or hitting ' +
+        'people raises your wanted level. Lay low for 25 seconds and the heat fades.',
+    };
+    this.el.menuTitle.textContent = titles[kind] || kind;
+    this.el.menuBody.textContent = bodies[kind] || '';
+    this.el.menuButtons.innerHTML = buttons.map(([a, label]) => `<button data-action="${a}">${label}</button>`).join('');
+    this.el.menu.dataset.kind = kind;
+  }
+
+  hideMenu() {
+    this.el.menu.style.display = 'none';
+    this.el.hud.style.display = 'flex';
+  }
 }
